@@ -30,6 +30,7 @@ from depth_anything_3.utils.alignment import (
     set_sky_regions_to_max_depth,
 )
 from depth_anything_3.utils.geometry import affine_inverse, as_homogeneous, map_pdf_to_opacity
+from depth_anything_3.utils.pose_align import batch_align_poses_umeyama
 from depth_anything_3.utils.ray_utils import get_extrinsic_from_camray
 
 
@@ -106,6 +107,12 @@ class DepthAnything3Net(nn.Module):
         infer_gs: bool = False,
         use_ray_pose: bool = False,
         ref_view_strategy: str = "saddle_balanced",
+        reorder_cam_token_by_reference: bool = True,
+        input_extrinsics: torch.Tensor | None = None,
+        input_intrinsics: torch.Tensor | None = None,
+        use_aligned_pred_cam: bool = False,
+        gs_down_ratio: int = 1,
+        gs_scale_extra_multiplier: float = 1.0,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass through the network.
@@ -118,6 +125,11 @@ class DepthAnything3Net(nn.Module):
             infer_gs: Enable Gaussian Splatting branch
             use_ray_pose: Use ray-based pose estimation
             ref_view_strategy: Strategy for selecting reference view
+            use_aligned_pred_cam: If True, align predicted cameras to input extrinsics
+                space (via inverse Sim(3)) and use them for GS unprojection instead of
+                directly substituting input extrinsics.
+            gs_down_ratio: Downsample GS head output by this factor (1 = full res).
+            gs_scale_extra_multiplier: Extra multiplier for Gaussian scales.
 
         Returns:
             Dictionary containing predictions and auxiliary features
@@ -130,7 +142,11 @@ class DepthAnything3Net(nn.Module):
             cam_token = None
 
         feats, aux_feats = self.backbone(
-            x, cam_token=cam_token, export_feat_layers=export_feat_layers, ref_view_strategy=ref_view_strategy
+            x,
+            cam_token=cam_token,
+            export_feat_layers=export_feat_layers,
+            ref_view_strategy=ref_view_strategy,
+            reorder_cam_token_by_reference=bool(reorder_cam_token_by_reference),
         )
         # feats = [[item for item in feat] for feat in feats]
         H, W = x.shape[-2], x.shape[-1]
@@ -143,7 +159,18 @@ class DepthAnything3Net(nn.Module):
             else:
                 output = self._process_camera_estimation(feats, H, W, output)
             if infer_gs:
-                output = self._process_gs_head(feats, H, W, output, x, extrinsics, intrinsics)
+                output = self._process_gs_head(
+                    feats,
+                    H,
+                    W,
+                    output,
+                    x,
+                    input_extrinsics,
+                    input_intrinsics,
+                    use_aligned_pred_cam=use_aligned_pred_cam,
+                    gs_down_ratio=gs_down_ratio,
+                    gs_scale_extra_multiplier=gs_scale_extra_multiplier,
+                )
         
         output = self._process_mono_sky_estimation(output)    
 
@@ -236,26 +263,33 @@ class DepthAnything3Net(nn.Module):
         in_images: torch.Tensor,
         extrinsics: torch.Tensor | None = None,
         intrinsics: torch.Tensor | None = None,
+        use_aligned_pred_cam: bool = False,
+        gs_down_ratio: int = 1,
+        gs_scale_extra_multiplier: float = 1.0,
     ) -> Dict[str, torch.Tensor]:
         """Process 3DGS parameters estimation if 3DGS head is available."""
         if self.gs_head is None or self.gs_adapter is None:
             return output
         assert output.get("depth", None) is not None, "must provide MV depth for the GS head."
 
-        # The depth is defined in the DA3 model's camera space,
-        # so even with provided GT camera poses,
-        # we instead use the predicted camera poses for better alignment.
+        # The depth is defined in the DA3 model's camera space, so we start from
+        # the predicted camera poses and optionally align scale to input poses.
         ctx_extr = output.get("extrinsics", None)
         ctx_intr = output.get("intrinsics", None)
         assert (
             ctx_extr is not None and ctx_intr is not None
         ), "must process camera info first if GT is not available"
 
-        gt_extr = extrinsics
+        input_extr = extrinsics
         # homo the extr if needed
         ctx_extr = as_homogeneous(ctx_extr)
-        if gt_extr is not None:
-            gt_extr = as_homogeneous(gt_extr)
+        if input_extr is not None:
+            input_extr = as_homogeneous(input_extr)
+
+        # Temporarily override GS head down_ratio for GS downsampling.
+        original_down_ratio = self.gs_head.down_ratio
+        if gs_down_ratio != 1:
+            self.gs_head.down_ratio = gs_down_ratio
 
         # forward through the gs_dpt head to get 'camera space' parameters
         gs_outs = self.gs_head(
@@ -268,16 +302,79 @@ class DepthAnything3Net(nn.Module):
         raw_gaussians = gs_outs.raw_gs
         densities = gs_outs.raw_gs_conf
 
+        # Restore original down_ratio.
+        self.gs_head.down_ratio = original_down_ratio
+
+        # Determine the GS spatial resolution (may differ from (H, W) when
+        # gs_down_ratio > 1).
+        H_gs, W_gs = raw_gaussians.shape[2], raw_gaussians.shape[3]
+
+        gs_extr = ctx_extr
+        gs_intr = ctx_intr
+        gs_depths = output.depth
+        if input_extr is not None:
+
+            rots, trans, pose_scales = batch_align_poses_umeyama(
+                ctx_extr.detach().float(),
+                input_extr.detach().float(),
+            )
+
+            pose_scales = torch.clamp(pose_scales.to(dtype=gs_depths.dtype), min=1e-6)
+            scale_view = pose_scales.view(-1, 1, 1, 1)
+            gs_depths = gs_depths / scale_view
+            if getattr(self.gs_adapter, "pred_offset_depth", False):
+                raw_gaussians = raw_gaussians.clone()
+                raw_gaussians[..., -1] = raw_gaussians[..., -1] / scale_view
+
+            if use_aligned_pred_cam:
+                # Align predicted cameras to input extrinsics space using inverse Sim(3).
+                # The Umeyama alignment gives: s * R @ input_pose + t ≈ predicted_pose
+                # Inverse: input_pose ≈ R^T @ (predicted_pose - t) / s
+                _dtype = ctx_extr.dtype
+                rots_inv = rots.transpose(-1, -2).to(dtype=_dtype)       # [B, 3, 3]
+                _trans = trans.to(dtype=_dtype)                           # [B, 3]
+                _scales = pose_scales.to(dtype=_dtype)                    # [B]
+
+                pred_c2w = affine_inverse(ctx_extr)                      # [B, N, 4, 4]
+                aligned_c2w = torch.zeros_like(pred_c2w)
+                aligned_c2w[..., :3, :3] = rots_inv[:, None] @ pred_c2w[..., :3, :3]
+                aligned_c2w[..., :3, 3] = (
+                    (rots_inv[:, None] @ (pred_c2w[..., :3, 3:] - _trans[:, None, :, None])).squeeze(-1)
+                    / _scales[:, None, None]
+                )
+                aligned_c2w[..., 3, 3] = 1.0
+                gs_extr = affine_inverse(aligned_c2w)
+            else:
+                gs_extr = input_extr
+
+            if intrinsics is not None:
+                gs_intr = intrinsics
+
+        # Downsample depth and scale intrinsics to match GS resolution if needed.
+        if (H_gs, W_gs) != (H, W):
+            stride_h = H // H_gs
+            stride_w = W // W_gs
+            gs_depths = gs_depths[:, :, ::stride_h, ::stride_w]
+            # Scale intrinsics from original image resolution to GS resolution.
+            # Without this, the principal point (cx, cy) would be at the wrong
+            # position in the GS grid, producing completely wrong ray directions.
+            sx, sy = W_gs / W, H_gs / H
+            gs_extr = gs_extr  # extrinsics unchanged
+            gs_intr = gs_intr.clone()
+            gs_intr[..., 0, :] *= sx
+            gs_intr[..., 1, :] *= sy
+
         # convert to 'world space' 3DGS parameters; ready to export and render
-        # gt_extr could be None, and will be used to align the pose scale if available
+        # gs_gt_extr could be None, and will be used to align the pose scale if available
         gs_world = self.gs_adapter(
-            extrinsics=ctx_extr,
-            intrinsics=ctx_intr,
-            depths=output.depth,
+            extrinsics=gs_extr,
+            intrinsics=gs_intr,
+            depths=gs_depths,
             opacities=map_pdf_to_opacity(densities),
             raw_gaussians=raw_gaussians,
-            image_shape=(H, W),
-            gt_extrinsics=gt_extr,
+            image_shape=(H_gs, W_gs),
+            gt_extrinsics=None,
+            gs_scale_extra_multiplier=gs_scale_extra_multiplier,
         )
         output.gaussians = gs_world
 
@@ -342,6 +439,12 @@ class NestedDepthAnything3Net(nn.Module):
         infer_gs: bool = False,
         use_ray_pose: bool = False,
         ref_view_strategy: str = "saddle_balanced",
+        reorder_cam_token_by_reference: bool = True,
+        input_extrinsics: torch.Tensor | None = None,
+        input_intrinsics: torch.Tensor | None = None,
+        use_aligned_pred_cam: bool = False,
+        gs_down_ratio: int = 1,
+        gs_scale_extra_multiplier: float = 1.0,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass through both branches with metric scaling alignment.
@@ -354,15 +457,37 @@ class NestedDepthAnything3Net(nn.Module):
             infer_gs: Enable Gaussian Splatting branch
             use_ray_pose: Use ray-based pose estimation
             ref_view_strategy: Strategy for selecting reference view
+            use_aligned_pred_cam: If True, align predicted cameras to input extrinsics
+                space (via inverse Sim(3)) and use them for GS unprojection.
+            gs_down_ratio: Downsample GS head output by this factor (1 = full res).
+            gs_scale_extra_multiplier: Extra multiplier for Gaussian scales.
 
         Returns:
             Dictionary containing aligned depth predictions and camera parameters
         """
         # Get predictions from both branches
         output = self.da3(
-            x, extrinsics, intrinsics, export_feat_layers=export_feat_layers, infer_gs=infer_gs, use_ray_pose=use_ray_pose, ref_view_strategy=ref_view_strategy
+            x,
+            extrinsics,
+            intrinsics,
+            export_feat_layers=export_feat_layers,
+            infer_gs=infer_gs,
+            use_ray_pose=use_ray_pose,
+            ref_view_strategy=ref_view_strategy,
+            reorder_cam_token_by_reference=bool(reorder_cam_token_by_reference),
+            input_extrinsics=input_extrinsics,
+            input_intrinsics=input_intrinsics,
+            use_aligned_pred_cam=use_aligned_pred_cam,
+            gs_down_ratio=gs_down_ratio,
+            gs_scale_extra_multiplier=gs_scale_extra_multiplier,
         )
         metric_output = self.da3_metric(x)
+
+        # Propagate sky prediction to the final output so the public API can expose it as Prediction.sky.
+        # The nested model uses metric_output.sky internally for alignment/sky handling, but without this
+        # assignment callers would see Prediction.sky=None even when the metric branch predicts sky.
+        if ("sky" not in output) and ("sky" in metric_output):
+            output["sky"] = metric_output["sky"]
 
         # Apply metric scaling and alignment
         output = self._apply_metric_scaling(output, metric_output)

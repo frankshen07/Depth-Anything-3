@@ -30,7 +30,7 @@ Here are quick examples to get you started:
 from depth_anything_3.api import DepthAnything3
 
 # Initialize and run inference
-model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE").to("cuda")
+model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE-1.1").to("cuda")
 prediction = model.inference(["image1.jpg", "image2.jpg"])
 ```
 
@@ -70,7 +70,7 @@ prediction = model.inference(
 ### ✨ Advanced Export with Gaussian Splatting
 ```python
 # Export multiple formats including Gaussian Splatting
-# Note: infer_gs=True requires da3-giant or da3nested-giant-large model
+# Note: infer_gs=True requires da3-giant or DA3NESTED-GIANT-LARGE-1.1 model
 model = DepthAnything3(model_name="da3-giant").to("cuda")
 
 prediction = model.inference(
@@ -147,7 +147,7 @@ model = model.to("cuda")  # Move to GPU
     - 🪶 `"da3-small"` - 0.08B params, any-view model
     - 👁️ `"da3mono-large"` - 0.35B params, monocular depth only
     - 📏 `"da3metric-large"` - 0.35B params, metric depth with sky segmentation
-    - 🎯 `"da3nested-giant-large"` - 1.40B params, nested model with all features
+    - 🎯 `"DA3NESTED-GIANT-LARGE-1.1"` - 1.40B params, nested model with all features
 
 ### 🚀 inference() Method
 
@@ -370,15 +370,18 @@ The API supports multiple export formats for different use cases:
 - **Description**: Gaussian Splatting point cloud format
 - **Contents**: 3DGS data in PLY format. Compatible with standard 3DGS viewers such as [SuperSplat](https://superspl.at/editor) (recommended), [SPARK](https://sparkjs.dev/viewer/).
 - **Use case**: Gaussian Splatting reconstruction
-- **Requirements**: Must set `infer_gs=True` when calling `inference()`. Only supported by `da3-giant` and `da3nested-giant-large` models.
+- **Requirements**: Must set `infer_gs=True` when calling `inference()`. Only supported by `da3-giant` and `DA3NESTED-GIANT-LARGE-1.1` models.
 - **Additional configs**, provided via `export_kwargs` (see [Export Parameters](#export-parameters)):
   - `gs_views_interval`: Export to 3DGS every N views, default: `1`.
+  - `prune_border_gs`: If `True`, drop Gaussians at image borders (often lower quality). Default: `True`.
+  - `prune_by_depth_percent`: If set to `< 1.0`, drop the farthest depth tail per view by percentile. Default: `0.9`. Use `1.0` (or `None`) to disable.
+  - `prune_by_opacity_percentile`: If set to `0 < q < 1`, drop the lowest-opacity Gaussians per view by quantile (e.g. `0.1` drops the lowest 10%). Default: `None` (disabled).
 
 ### 🎥 `gs_video`
 - **Description**: Rasterized 3DGS to obtain videos
 - **Contents**: A video of 3DGS-rasterized views using either provided viewpoints or a predefined camera trajectory.
 - **Use case**: Video rendering for Gaussian Splatting
-- **Requirements**: Must set `infer_gs=True` when calling `inference()`. Only supported by `da3-giant` and `da3nested-giant-large` models.
+- **Requirements**: Must set `infer_gs=True` when calling `inference()`. Only supported by `da3-giant` and `DA3NESTED-GIANT-LARGE-1.1` models.
 - **Note**: Can optionally use `render_exts`, `render_ixts`, and `render_hw` parameters in `inference()` method to specify novel viewpoints.
 - **Additional configs**, provided via `export_kwargs` (see [Export Parameters](#export-parameters)):
   - `extrinsics`: Optional world-to-camera poses for novel views. Falls back to the predicted poses of input views if not provided. (Alternatively, use `render_exts` parameter in `inference()`)

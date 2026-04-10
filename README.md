@@ -62,7 +62,7 @@ We release three series of models, each tailored for specific use cases in visua
 
 - 🔍 **DA3 Monocular Series** (`DA3Mono-Large`). A dedicated model for high-quality relative monocular depth estimation. Unlike disparity-based models (e.g.,  [Depth Anything 2](https://github.com/DepthAnything/Depth-Anything-V2)), it directly predicts depth, resulting in superior geometric accuracy.
 
-🔗 Leveraging these available models, we developed a **nested series** (`DA3Nested-Giant-Large`). This series combines a any-view giant model with a metric model to reconstruct visual geometry at a real-world metric scale.
+🔗 Leveraging these available models, we developed a **nested series** (`DA3NESTED-GIANT-LARGE-1.1`). This series combines a any-view giant model with a metric model to reconstruct visual geometry at a real-world metric scale.
 
 ### 🛠️ Codebase Features
 Our repository is designed to be a powerful and user-friendly toolkit for both practical application and future research.
@@ -101,7 +101,7 @@ For detailed model information, please refer to the [Model Cards](#-model-cards)
 import glob, os, torch
 from depth_anything_3.api import DepthAnything3
 device = torch.device("cuda")
-model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE")
+model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE-1.1")
 model = model.to(device=device)
 example_path = "assets/examples/SOH"
 images = sorted(glob.glob(os.path.join(example_path, "*.png")))
@@ -122,7 +122,7 @@ print(prediction.intrinsics.shape)
 
 ```bash
 
-export MODEL_DIR=depth-anything/DA3NESTED-GIANT-LARGE
+export MODEL_DIR=depth-anything/DA3NESTED-GIANT-LARGE-1.1
 # This can be a Hugging Face repository or a local directory
 # If you encounter network issues, consider using the following mirror: export HF_ENDPOINT=https://hf-mirror.com
 # Alternatively, you can download the model directly from Hugging Face
@@ -214,7 +214,6 @@ The Nested series uses an Any-view model to estimate pose and depth, and a monoc
 |-------------------------------|-----------|---------------|--------------|---------------|-------|---------------|-----------|----------------|
 | **Nested** | | | | | | | | |
 | [DA3NESTED-GIANT-LARGE-1.1](https://huggingface.co/depth-anything/DA3NESTED-GIANT-LARGE-1.1)  | 1.40B     | ✅             | ✅            | ✅             | ✅     | ✅             | ✅         | CC BY-NC 4.0   |
-| [DA3NESTED-GIANT-LARGE](https://huggingface.co/depth-anything/DA3NESTED-GIANT-LARGE)  | 1.40B     | ✅             | ✅            | ✅             | ✅     | ✅             | ✅         | CC BY-NC 4.0   |
 | **Any-view Model** | | | | | | | | |
 | [DA3-GIANT-1.1](https://huggingface.co/depth-anything/DA3-GIANT-1.1)                     | 1.15B     | ✅             | ✅            | ✅             | ✅     |               |           | CC BY-NC 4.0   |
 | [DA3-GIANT](https://huggingface.co/depth-anything/DA3-GIANT)                     | 1.15B     | ✅             | ✅            | ✅             | ✅     |               |           | CC BY-NC 4.0   |
@@ -232,11 +231,11 @@ The Nested series uses an Any-view model to estimate pose and depth, and a monoc
 
 ## ❓ FAQ
 
-- **Monocular Metric Depth**: To obtain metric depth in meters from `DA3METRIC-LARGE`, use `metric_depth = focal * net_output / 300.`, where `focal` is the focal length in pixels (typically the average of fx and fy from the camera intrinsic matrix K). Note that the output from `DA3NESTED-GIANT-LARGE` is already in meters.
+- **Monocular Metric Depth**: To obtain metric depth in meters from `DA3METRIC-LARGE`, use `metric_depth = focal * net_output / 300.`, where `focal` is the focal length in pixels (typically the average of fx and fy from the camera intrinsic matrix K). Note that the output from `DA3NESTED-GIANT-LARGE-1.1` is already in meters.
 
 - <a id="use-ray-pose"></a>**Ray Head (`use_ray_pose`)**:  Our API and CLI support `use_ray_pose` arg, which means that the model will derive camera pose from ray head, which is generally slightly slower, but more accurate. Note that the default is `False` for faster inference speed. 
   <details>
-  <summary>AUC3 Results for DA3NESTED-GIANT-LARGE</summary>
+  <summary>AUC3 Results for DA3NESTED-GIANT-LARGE-1.1</summary>
   
   | Model | HiRoom | ETH3D | DTU | 7Scenes | ScanNet++ | 
   |-------|------|-------|-----|---------|-----------|

@@ -106,7 +106,16 @@ class GSDPT(DPT):
         fused = custom_interpolate(fused, (h_out, w_out), mode="bilinear", align_corners=True)
 
         # inject the image information here
-        fused = fused + self.images_merger(images)
+        if getattr(self, 'gs_ds_feature_mode', False) and images.shape[-2:] != fused.shape[-2:]:
+            # Mode: run images_merger at full res, then avg-pool features down.
+            img_feat = self.images_merger(images)
+            img_feat = torch.nn.functional.adaptive_avg_pool2d(img_feat, (h_out, w_out))
+        else:
+            # Default: downsample images first (if needed), then run images_merger.
+            if images.shape[-2:] != fused.shape[-2:]:
+                images = custom_interpolate(images, (h_out, w_out), mode="bilinear", align_corners=True)
+            img_feat = self.images_merger(images)
+        fused = fused + img_feat
 
         if self.pos_embed:
             fused = self._add_pos_embed(fused, W, H)

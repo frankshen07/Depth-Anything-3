@@ -81,12 +81,36 @@ def _poses_from_ext(ext_ref, ext_est):
     return pose_ref, pose_est
 
 
+def _add_tiny_pose_offsets(poses, offset_scale=1e-6):
+    """Add tiny sinusoidal offsets to pose translations to break degeneracy."""
+    poses = poses.copy()
+    for i in range(len(poses)):
+        poses[i, :3, 3] += np.array([
+            offset_scale * np.sin(2 * np.pi * i * 0.07),
+            offset_scale * np.cos(2 * np.pi * i * 0.11),
+            offset_scale * np.sin(2 * np.pi * i * 0.13),
+        ])
+    return poses
+
+
 def _umeyama_sim3_from_paths(pose_ref, pose_est):
     path_ref = PosePath3D(poses_se3=pose_ref.copy())
     path_est = PosePath3D(poses_se3=pose_est.copy())
     r, t, s = path_est.align(path_ref, correct_scale=True)
     pose_est_aligned = np.stack(path_est.poses_se3)
     return r, t, s, pose_est_aligned
+
+
+def _umeyama_sim3_from_paths_robust(pose_ref, pose_est):
+    """Umeyama alignment with automatic tiny-offset retry on degenerate poses."""
+    try:
+        return _umeyama_sim3_from_paths(pose_ref, pose_est)
+    except Exception:
+        pose_ref_off = _add_tiny_pose_offsets(pose_ref)
+        pose_est_off = _add_tiny_pose_offsets(pose_est)
+        r, t, s, _ = _umeyama_sim3_from_paths(pose_ref_off, pose_est_off)
+        pose_est_aligned = _apply_sim3_to_poses(pose_est, r, t, s)
+        return r, t, s, pose_est_aligned
 
 
 def _apply_sim3_to_poses(poses, r, t, s):
@@ -120,7 +144,7 @@ def _ransac_align_sim3(
         sub_n = max(3, min(sub_n, N))
 
     # Pre-alignment + default threshold
-    r0, t0, s0, pose_est0 = _umeyama_sim3_from_paths(pose_ref, pose_est)
+    r0, t0, s0, pose_est0 = _umeyama_sim3_from_paths_robust(pose_ref, pose_est)
     if inlier_thresh is None:
         inlier_thresh = _median_nn_thresh(pose_ref, pose_est0)
 
@@ -133,7 +157,7 @@ def _ransac_align_sim3(
     for _ in range(max_iters):
         sample = rng.choice(idx_all, size=sub_n, replace=False)
         try:
-            r, t, s, _ = _umeyama_sim3_from_paths(pose_ref[sample], pose_est[sample])
+            r, t, s, _ = _umeyama_sim3_from_paths_robust(pose_ref[sample], pose_est[sample])
         except Exception:
             continue
         pose_h = _apply_sim3_to_poses(pose_est, r, t, s)
@@ -149,7 +173,7 @@ def _ransac_align_sim3(
 
     # Fit again with best inliers
     if best_inliers is not None and best_inliers.sum() >= 3:
-        r, t, s, _ = _umeyama_sim3_from_paths(pose_ref[best_inliers], pose_est[best_inliers])
+        r, t, s, _ = _umeyama_sim3_from_paths_robust(pose_ref[best_inliers], pose_est[best_inliers])
     else:
         r, t, s = best_model
     return r, t, s
@@ -176,7 +200,7 @@ def align_poses_umeyama(
     pose_ref, pose_est = _poses_from_ext(ext_ref, ext_est)
 
     if not ransac:
-        r, t, s, pose_est_aligned = _umeyama_sim3_from_paths(pose_ref, pose_est)
+        r, t, s, pose_est_aligned = _umeyama_sim3_from_paths_robust(pose_ref, pose_est)
     else:
         r, t, s = _ransac_align_sim3(
             pose_ref,

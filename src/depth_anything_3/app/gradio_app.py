@@ -634,8 +634,8 @@ Examples:
     # Directory configuration
     parser.add_argument(
         "--model-dir",
-        default="depth-anything/DA3NESTED-GIANT-LARGE",
-        help="Path to the model directory (default: depth-anything/DA3NESTED-GIANT-LARGE)",
+        default="depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+        help="Path to the model directory (default: depth-anything/DA3NESTED-GIANT-LARGE-1.1)",
     )
     parser.add_argument(
         "--workspace-dir",

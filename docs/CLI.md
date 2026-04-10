@@ -28,7 +28,7 @@ The CLI can run fully offline or connect to the backend for cached weights and t
 
 ```bash
 # 🔧 Start backend service (optional, keeps model resident in GPU memory)
-da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE
+da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1
 
 # 🚀 Use auto mode to process input
 da3 auto path/to/input --export-dir ./workspace/scene001
@@ -353,18 +353,18 @@ da3 backend [OPTIONS]
 
 ```bash
 # 🚀 Basic backend service
-da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE
+da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1
 
 # 🖼️ Backend with gallery
 da3 backend \
-    --model-dir depth-anything/DA3NESTED-GIANT-LARGE \
+    --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 \
     --device cuda \
     --host 0.0.0.0 \
     --port 8008 \
     --gallery-dir ./workspace
 
 # 💻 Use CPU
-da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE --device cpu
+da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 --device cpu
 ```
 
 ---
@@ -398,13 +398,13 @@ da3 gradio [OPTIONS]
 ```bash
 # 🎨 Basic Gradio application
 da3 gradio \
-    --model-dir depth-anything/DA3NESTED-GIANT-LARGE \
+    --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 \
     --workspace-dir ./workspace \
     --gallery-dir ./gallery
 
 # 🌐 Enable sharing and debug
 da3 gradio \
-    --model-dir depth-anything/DA3NESTED-GIANT-LARGE \
+    --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 \
     --workspace-dir ./workspace \
     --gallery-dir ./gallery \
     --share \
@@ -412,7 +412,7 @@ da3 gradio \
 
 # ⚡ Pre-cache examples
 da3 gradio \
-    --model-dir depth-anything/DA3NESTED-GIANT-LARGE \
+    --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 \
     --workspace-dir ./workspace \
     --gallery-dir ./gallery \
     --cache-examples \
@@ -521,7 +521,7 @@ da3 gallery --gallery-dir ./workspace --open-browser
 
 ```bash
 # 🔧 Start backend service
-da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE --host 0.0.0.0 --port 8008
+da3 backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 --host 0.0.0.0 --port 8008
 
 # 🖼️ Process single image
 da3 image image.jpg --export-dir ./output1 --use-backend
@@ -584,7 +584,7 @@ da3 colmap ./colmap_data \
 ```bash
 # 🔧 Start backend
 da3 backend \
-    --model-dir depth-anything/DA3NESTED-GIANT-LARGE \
+    --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 \
     --device cuda \
     --host 0.0.0.0 \
     --port 8008 \
@@ -607,7 +607,7 @@ da3 gallery --gallery-dir ./workspace --open-browser
 ```bash
 # 🎨 Launch Gradio application
 da3 gradio \
-    --model-dir depth-anything/DA3NESTED-GIANT-LARGE \
+    --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 \
     --workspace-dir workspace/gradio \
     --gallery-dir ./gallery \
     --host 0.0.0.0 \

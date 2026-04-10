@@ -115,12 +115,28 @@ def save_gaussian_ply(
     gs_views_interval: int = 1,
     inv_opacity: Optional[bool] = True,
     prune_by_depth_percent: Optional[float] = 1.0,
+    prune_by_opacity_percentile: Optional[float] = None,
     prune_border_gs: Optional[bool] = True,
     match_3dgs_mcmc_dev: Optional[bool] = False,
 ):
     b = gaussians.means.shape[0]
     assert b == 1, "must set batch_size=1 when exporting 3D gaussians"
     src_v, out_h, out_w, _ = ctx_depth.shape
+
+    # When the GS head outputs at a lower resolution (gs_down_ratio > 1),
+    # the Gaussian count is smaller than src_v * out_h * out_w.  Detect this
+    # and adjust (out_h, out_w, ctx_depth) to the actual GS resolution.
+    n_total = gaussians.means.shape[1]
+    n_per_view = n_total // src_v
+    if n_per_view != out_h * out_w:
+        ratio = (out_h * out_w) / n_per_view
+        dr = int(round(ratio ** 0.5))
+        out_h = out_h // dr
+        out_w = out_w // dr
+        assert out_h * out_w == n_per_view, (
+            f"Cannot infer GS resolution: {n_per_view} != {out_h} * {out_w}"
+        )
+        ctx_depth = ctx_depth[:, ::dr, ::dr, :]
 
     # extract gs params
     world_means = gaussians.means
@@ -151,6 +167,24 @@ def save_gaussian_ply(
         d_mask = (in_depths[..., 0] <= d_percentile).unsqueeze(-1)
         mask = mask & d_mask
     mask = mask.squeeze(-1)  # v h w
+
+    # trim low-opacity gaussians by percentile (global over all N*H*W), e.g. 0.1 drops lowest 10%.
+    if (
+        prune_by_opacity_percentile is not None
+        and 0.0 < prune_by_opacity_percentile < 1.0
+    ):
+        # Use the model-space opacity in [0,1] for thresholding (more intuitive).
+        op = gaussians.opacities[0]
+        if op.ndim > 1 and op.shape[-1] == 1:
+            op = op[..., 0]
+        op_map = rearrange(op, "(v h w) -> v h w", v=src_v, h=out_h, w=out_w)
+        op_map = op_map.to(mask.device)
+        if mask.any():
+            flat = op_map[mask].float().flatten()
+            n = flat.numel()
+            k = max(1, min(n, int(n * prune_by_opacity_percentile)))
+            thr = torch.kthvalue(flat, k).values
+            mask = mask & (op_map >= thr)
 
     # helper fn, must place after mask
     def trim_select_reshape(element):

@@ -319,11 +319,22 @@ class DinoVisionTransformer(nn.Module):
                 # Reorder views to place reference view first
                 x = reorder_by_reference(x, b_idx)
                 local_x = reorder_by_reference(local_x, b_idx)
+                print (f"b_idx: {b_idx}")
 
             if self.alt_start != -1 and i == self.alt_start:
                 if kwargs.get("cam_token", None) is not None:
                     logger.info("Using camera conditions provided by the user")
                     cam_token = kwargs.get("cam_token")
+                    if (
+                        x.shape[1] >= THRESH_FOR_REF_SELECTION
+                        and self.alt_start != -1
+                        and "b_idx" in locals()
+                    ):
+                        # Bugfix (default enabled): when views are reordered to put the selected
+                        # reference view first, the camera tokens must follow the same order.
+                        # Allow disabling for ablation via `reorder_cam_token_by_reference=False`.
+                        if kwargs.get("reorder_cam_token_by_reference", True):
+                            cam_token = reorder_by_reference(cam_token, b_idx)
                 else:
                     ref_token = self.camera_token[:, :1].expand(B, -1, -1)
                     src_token = self.camera_token[:, 1:].expand(B, S - 1, -1)

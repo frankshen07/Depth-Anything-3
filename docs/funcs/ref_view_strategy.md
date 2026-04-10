@@ -80,7 +80,7 @@ In video-based depth estimation scenarios (like DA3-LONG), where inputs are cons
 ```python
 from depth_anything_3 import DepthAnything3
 
-model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE")
+model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE-1.1")
 
 # Use default (saddle_balanced)
 prediction = model.inference(

@@ -124,6 +124,9 @@ class GaussianAdapter(nn.Module):
         # make the scale invarient to resolution
         scale_min = self.gaussian_scale_min
         scale_max = self.gaussian_scale_max
+        gs_scale_extra_multiplier = kwargs.get("gs_scale_extra_multiplier", 1.0)
+        if gs_scale_extra_multiplier != 1.0:
+            scale_max = scale_max * gs_scale_extra_multiplier
         scales = scale_min + (scale_max - scale_min) * scales.sigmoid()
         pixel_size = 1 / torch.tensor((W, H), dtype=dtype, device=device)
         multiplier = self.get_scale_multiplier(intr_normed, pixel_size)

@@ -48,6 +48,7 @@ def render_3dgs(
     gaussian: Gaussians,
     background_color: Optional[torch.Tensor] = None,  # "batch_views 3"
     use_sh: bool = True,
+    use_sh_dc_only: bool = False,
     num_view: int = 1,
     color_mode: Literal["RGB+D", "RGB+ED"] = "RGB+D",
     **kwargs,
@@ -61,6 +62,8 @@ def render_3dgs(
     gaussian_quats = gaussian.rotations
     gaussian_opacities = gaussian.opacities
     gaussian_sh_coefficients = gaussian.harmonics
+    if use_sh and use_sh_dc_only:
+        gaussian_sh_coefficients = gaussian_sh_coefficients[..., 0:1]
     b, _, _ = extrinsics.shape
 
     if background_color is None:
@@ -171,6 +174,9 @@ def run_renderer_in_chunk_w_trj_mode(
     ] = "smooth",
     input_shape: Optional[tuple[int, int]] = None,
     enable_tqdm: Optional[bool] = False,
+    scene_scale: Optional[float] = None,
+    wander_radius_scale: float = 0.1,
+    use_sh_dc_only: bool = False,
     **kwargs,
 ) -> tuple[
     torch.Tensor,  # color, "batch view 3 height width"
@@ -200,6 +206,31 @@ def run_renderer_in_chunk_w_trj_mode(
             print(f"[DEBUG] Path smoothing failed with error: {e}.")
             smooth_c2ws = raw_c2ws
         return smooth_c2ws
+
+    def _estimate_scene_radius(gauss: Gaussians, max_samples: int = 200000) -> torch.Tensor:
+        means = gauss.means
+        center = means.median(dim=1).values
+        radius = (means - center.unsqueeze(1)).norm(dim=-1)
+        if radius.shape[1] > max_samples:
+            idx = torch.randperm(radius.shape[1], device=radius.device)[:max_samples]
+            radius = radius[:, idx]
+        radius = torch.quantile(radius, q=0.9, dim=1)
+        return torch.clamp(radius, min=1e-3)
+
+    scene_radius = None
+    if scene_scale is not None:
+        scene_radius = torch.tensor(
+            [scene_scale] * gaussians.means.shape[0],
+            device=gaussians.means.device,
+            dtype=gaussians.means.dtype,
+        )
+    else:
+        scene_radius = _estimate_scene_radius(gaussians)
+
+    def _scene_scaled_max_disp(intrinsic_normed: torch.Tensor, radius: torch.Tensor) -> float:
+        fx = intrinsic_normed[0, 0] * in_w
+        r = radius * float(wander_radius_scale)
+        return float((r * fx).item())
 
     # get rendered trj
     if trj_mode == "original":
@@ -248,13 +279,14 @@ def run_renderer_in_chunk_w_trj_mode(
             # apply dolly_zoom and wander in the middle frame
             assert cam2world.shape[0] == 1, "extend only supports for batch_size=1 currently."
             mid_idx = tgt_c2w.shape[1] // 2
+            max_disp = _scene_scaled_max_disp(tgt_intr[0, mid_idx], scene_radius[0])
             c2w_wd, intr_wd = render_wander_path(
                 tgt_c2w[0, mid_idx],
                 tgt_intr[0, mid_idx],
                 h=in_h,
                 w=in_w,
                 num_frames=max(36, min(60, mid_idx // 2)),
-                max_disp=24.0,
+                max_disp=max_disp,
             )
             c2w_dz, intr_dz = render_dolly_zoom_path(
                 tgt_c2w[0, mid_idx],
@@ -284,13 +316,16 @@ def run_renderer_in_chunk_w_trj_mode(
     elif trj_mode in ["wander", "dolly_zoom"]:
         if trj_mode == "wander":
             render_fn = render_wander_path
-            extra_kwargs = {"max_disp": 24.0}
+            extra_kwargs = {}
         else:
             render_fn = render_dolly_zoom_path
             extra_kwargs = {"D_focus": 30.0, "max_disp": 2.0}
         tgt_c2w = []
         tgt_intr = []
         for b_idx in range(cam2world.shape[0]):
+            if trj_mode == "wander":
+                max_disp = _scene_scaled_max_disp(intr_normed[b_idx, 0], scene_radius[b_idx])
+                extra_kwargs = {"max_disp": max_disp}
             c2w_i, intr_i = render_fn(
                 cam2world[b_idx, 0], intr_normed[b_idx, 0], h=in_h, w=in_w, **extra_kwargs
             )
@@ -330,6 +365,7 @@ def run_renderer_in_chunk_w_trj_mode(
             image_shape=image_shape,
             gaussian=gaussians,
             num_view=cur_n_view,
+            use_sh_dc_only=use_sh_dc_only,
             **kwargs,
         )
         all_colors.append(rearrange(color, "(b v) ... -> b v ...", v=cur_n_view))

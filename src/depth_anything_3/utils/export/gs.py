@@ -14,7 +14,7 @@
 
 import os
 from typing import Literal, Optional
-import moviepy.editor as mpy
+
 import torch
 
 from depth_anything_3.model.utils.gs_renderer import run_renderer_in_chunk_w_trj_mode
@@ -22,6 +22,11 @@ from depth_anything_3.specs import Prediction
 from depth_anything_3.utils.gsply_helpers import save_gaussian_ply
 from depth_anything_3.utils.layout_helpers import hcat, vcat
 from depth_anything_3.utils.visualize import vis_depth_map_tensor
+
+try:  # moviepy 2.2.1+ compatible import (no `moviepy.editor` package)
+    from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
+except Exception:  # pragma: no cover - handled gracefully at runtime
+    ImageSequenceClip = None
 
 VIDEO_QUALITY_MAP = {
     "low": {"crf": "28", "preset": "veryfast"},
@@ -36,6 +41,15 @@ def export_to_gs_ply(
     gs_views_interval: Optional[
         int
     ] = 1,  # export GS every N views, useful for extremely dense inputs
+    # Extra knobs forwarded to `save_gaussian_ply` for controlling filtering/pruning.
+    # Defaults are kept to match previous behavior.
+    shift_and_scale: bool = False,
+    save_sh_dc_only: bool = True,
+    inv_opacity: bool = True,
+    prune_by_depth_percent: Optional[float] = 0.9,
+    prune_by_opacity_percentile: Optional[float] = None,
+    prune_border_gs: bool = True,
+    match_3dgs_mcmc_dev: bool = False,
 ):
     gs_world = prediction.gaussians
     pred_depth = torch.from_numpy(prediction.depth).unsqueeze(-1).to(gs_world.means)  # v h w 1
@@ -48,13 +62,14 @@ def export_to_gs_ply(
         gaussians=gs_world,
         save_path=save_path,
         ctx_depth=pred_depth,
-        shift_and_scale=False,
-        save_sh_dc_only=True,
+        shift_and_scale=shift_and_scale,
+        save_sh_dc_only=save_sh_dc_only,
         gs_views_interval=gs_views_interval,
-        inv_opacity=True,
-        prune_by_depth_percent=0.9,
-        prune_border_gs=True,
-        match_3dgs_mcmc_dev=False,
+        inv_opacity=inv_opacity,
+        prune_by_depth_percent=prune_by_depth_percent,
+        prune_by_opacity_percentile=prune_by_opacity_percentile,
+        prune_border_gs=prune_border_gs,
+        match_3dgs_mcmc_dev=match_3dgs_mcmc_dev,
     )
 
 
@@ -81,6 +96,12 @@ def export_to_gs_video(
     output_name: Optional[str] = None,
     video_quality: Literal["low", "medium", "high"] = "high",
 ) -> None:
+    if ImageSequenceClip is None:
+        raise ImportError(
+            "moviepy is required for `gs_video` export, but could not be imported. "
+            "Please install moviepy (e.g., `pip install moviepy==2.2.1`)."
+        )
+
     gs_world = prediction.gaussians
     # if target poses are not provided, render the (smooth/interpolate) input poses
     if extrinsics is not None:
@@ -140,7 +161,7 @@ def export_to_gs_video(
         )  # T x H x W x C, uint8, numpy()
 
         fps = 24
-        clip = mpy.ImageSequenceClip(frames, fps=fps)
+        clip = ImageSequenceClip(frames, fps=fps)
         output_name = f"{idx:04d}_{trj_mode}" if output_name is None else output_name
         save_path = os.path.join(export_dir, f"gs_video/{output_name}.mp4")
         # clip.write_videofile(save_path, codec="libx264", audio=False, bitrate="4000k")
